@@ -63,6 +63,22 @@ covers it. The headers above show the origin does not matter.
 `bootstrap` takes about 6-10 s (213 channels, 591 videos). The frontend shows
 its cached copy first, so this is acceptable for step 1.
 
+## Gemini page suggestions (extra check)
+
+No-write test (`spike` kind `gemini`): 4 generic test pages, the first 10
+channels, free-tier key, `thinkingLevel: low`.
+
+| Model | Gemini call time | Result |
+|---|---|---|
+| `gemini-3.5-flash-lite` | 1.9 s | ok: 2 channels got a page, 8 got `none` |
+| `gemini-3.8-flash` | 251 s | ok: 1 channel got a page, 9 got `none` |
+| `gemini-flash-latest` | over 300 s | test client gave up |
+
+The default model is now `gemini-3.5-flash-lite`: the Flash models are too slow
+on the free tier for a refresh run (50 channels per call). Same tokens in and
+out (about 1,200 in, 400 out per 10 channels). Many `none` results are expected
+with generic test pages.
+
 ## S4: channels and quota
 
 Run log (`runs` tab):

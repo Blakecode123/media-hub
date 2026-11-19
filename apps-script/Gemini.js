@@ -24,7 +24,8 @@ function geminiPrompt_(pages, items) {
  * Ask Gemini for suggestions for up to 50 channels.
  * Returns {ok:true, suggestions} or {ok:false, error: 'gemini_busy'|'gemini_error'|'no_gemini_key'}.
  */
-function geminiSuggest(pages, channels, videos) {
+function geminiSuggest(pages, channels, videos, opts) {
+  opts = opts || {};
   var key = cfg('GEMINI_API_KEY');
   if (!key) return { ok: false, error: 'no_gemini_key' };
   var byChan = {};
@@ -39,6 +40,8 @@ function geminiSuggest(pages, channels, videos) {
     contents: [{ role: 'user', parts: [{ text: geminiPrompt_(pages, items) }] }],
     generationConfig: {
       temperature: 0.2,
+      // Sorting needs little reasoning; GEMINI_THINKING can raise it (low / medium / high).
+      thinkingConfig: { thinkingLevel: opts.thinking || cfg('GEMINI_THINKING') || 'low' },
       responseMimeType: 'application/json',
       responseSchema: {
         type: 'ARRAY',
@@ -50,8 +53,9 @@ function geminiSuggest(pages, channels, videos) {
       }
     }
   };
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(cfg('GEMINI_MODEL')) + ':generateContent';
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(opts.model || cfg('GEMINI_MODEL')) + ':generateContent';
   var resp;
+  var t0 = Date.now();
   try {
     resp = UrlFetchApp.fetch(url, {
       method: 'post', contentType: 'application/json', payload: JSON.stringify(body),
@@ -61,12 +65,16 @@ function geminiSuggest(pages, channels, videos) {
     return { ok: false, error: 'gemini_error', message: 'network' };
   }
   var code = resp.getResponseCode();
-  dlog('gemini status', code, 'channels', channels.length);
+  var meta = { fetchMs: Date.now() - t0, code: code };
+  dlog('gemini status', code, 'channels', channels.length, 'ms', meta.fetchMs);
   if (code === 429) return { ok: false, error: 'gemini_busy' };
-  if (code !== 200) return { ok: false, error: 'gemini_error', message: 'HTTP ' + code };
+  if (code !== 200) return { ok: false, error: 'gemini_error', message: 'HTTP ' + code + ' ' + resp.getContentText().slice(0, 200), meta: meta };
   var text = '';
   try {
     var data = JSON.parse(resp.getContentText());
+    meta.usage = data.usageMetadata || null;
+    meta.modelVersion = data.modelVersion || '';
+    meta.finish = data.candidates && data.candidates[0] && data.candidates[0].finishReason;
     var parts = data.candidates[0].content.parts;
     text = parts.map(function (p) { return p.text || ''; }).join('');
   } catch (e2) {
@@ -75,6 +83,7 @@ function geminiSuggest(pages, channels, videos) {
   var pageIds = pages.map(function (p) { return p.id; });
   var checked = checkGeminiOutput(text, pageIds, channels.map(function (c) { return c.id; }));
   if (!checked.ok) return { ok: false, error: 'gemini_error', message: checked.error };
+  checked.meta = meta;
   return checked;
 }
 

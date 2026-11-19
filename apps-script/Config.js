@@ -6,7 +6,8 @@
  */
 
 var CONFIG_DEFAULTS = {
-  GEMINI_MODEL: 'gemini-3.8-flash',
+  // 2026-11-19 test, 10 channels on the free tier: flash-lite 2 s; gemini-3.8-flash 250 s; flash-latest over 300 s.
+  GEMINI_MODEL: 'gemini-3.5-flash-lite',
   DEBUG: '0',
   REFRESH_MINUTES: '60',
   LIVE_HOURS: '6'

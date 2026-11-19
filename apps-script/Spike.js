@@ -10,6 +10,7 @@ function spikeAction(b) {
   if (b.kind === 'status') return spikeStatus_();
   if (b.kind === 'error') throw new Error('forced test error');
   if (b.kind === 'uuPath') return spikeUuPath_(b);
+  if (b.kind === 'gemini') return spikeGemini_(b);
   return { ok: false, error: 'bad_request' };
 }
 
@@ -52,6 +53,29 @@ function spikeUuPath_(b) {
     uuVideosNotInLf: uuVideos.filter(function (r) { return !lf[r.id] && Date.parse(r.published) >= oldestLf; }).length,
     units: ctx.units, errors: errorSummary(ctx)
   };
+}
+
+/**
+ * Gemini check without writing: generic test pages, the first n channels.
+ * Returns counts only (channels with a page, channels with 'none').
+ */
+function spikeGemini_(b) {
+  var t0 = Date.now();
+  var pages = [
+    { id: 't_music', name: 'Music', hint: 'songs, instruments, music theory' },
+    { id: 't_science', name: 'Science and tech', hint: 'science, engineering, computers' },
+    { id: 't_games', name: 'Gaming', hint: 'video games' },
+    { id: 't_food', name: 'Food', hint: 'cooking, recipes' }
+  ];
+  var chans = readTable('channels').slice(0, Math.min(Number(b.n) || 10, 50));
+  var res = geminiSuggest(pages, chans, readTable('videos'), { model: b.model, thinking: b.thinking });
+  if (!res.ok) return { ok: false, error: res.error, message: res.message || '', model: b.model || cfg('GEMINI_MODEL'), meta: res.meta, ms: Date.now() - t0 };
+  var withPage = 0, none = 0, pageHits = 0;
+  for (var id in res.suggestions) {
+    if (res.suggestions[id] === 'none') none++;
+    else { withPage++; pageHits += res.suggestions[id].length; }
+  }
+  return { ok: true, model: b.model || cfg('GEMINI_MODEL'), meta: res.meta, channels: chans.length, withPage: withPage, none: none, pageHits: pageHits, ms: Date.now() - t0 };
 }
 
 function countBy_(list, fn) {
