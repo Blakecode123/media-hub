@@ -48,12 +48,13 @@ shows only its own items. There is never a mixed feed.
 
 - Each page shows new uploads from its channels only, newest first.
 - Shorts are hidden (uploads-without-Shorts playlist; to verify in the first spike).
+- Live-stream recordings show in feeds (Live playlist, checked every 6 h).
 - No length filter.
 - Feeds hold uploads from the last 30 days only (YouTube API data-storage rule).
 - Refresh every hour, plus a refresh button.
-- Quota: about 1 unit per channel per refresh. Hourly refresh fits the
-  10,000-unit daily quota up to about 400 channels. The first spike counts the
-  channels and lowers the rate if needed.
+- Quota: about 1 unit per channel per hourly refresh, plus 1 per channel every 6 h
+  for live recordings. This stays under 8,000 of the 10,000 daily units up to
+  about 280 channels. The first spike counts the channels and lowers the rate if needed.
 
 ### Player
 
