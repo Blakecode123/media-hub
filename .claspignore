@@ -1,0 +1,5 @@
+# clasp pushes only the Apps Script code and manifest from apps-script/.
+# Secrets.local.js (git-ignored) is pushed on purpose: setup() copies its KEY into Script Properties.
+**/**
+!**/appsscript.json
+!**/*.js
