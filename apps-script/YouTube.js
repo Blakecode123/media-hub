@@ -206,6 +206,7 @@ function fetchOneChannel(params, ctx) {
 /**
  * Shorts check by URL (no API units): GET youtube.com/shorts/<id> without following redirects.
  * 200 = Short, 3xx = not a Short. Returns {videoId: true|false|null}.
+ * Kept for spike S1 only: from Apps Script, known Shorts also redirect, so refresh uses UUSH instead.
  */
 function checkShortsByUrl(ids) {
   var out = {};

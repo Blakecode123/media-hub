@@ -9,6 +9,7 @@ function spikeAction(b) {
   if (b.kind === 'runs') return { ok: true, runs: lastRuns(Math.min(Number(b.n) || 10, 200)) };
   if (b.kind === 'status') return spikeStatus_();
   if (b.kind === 'error') throw new Error('forced test error');
+  if (b.kind === 'uuPath') return spikeUuPath_(b);
   return { ok: false, error: 'bad_request' };
 }
 
@@ -26,6 +27,30 @@ function spikeStatus_() {
     lastRefresh: freshProp('lastRefresh'),
     lastError: freshProp('lastError'),
     rows: { pages: readTable('pages').length, channels: readTable('channels').length, videos: readTable('videos').length, state: readTable('state').length }
+  };
+}
+
+/**
+ * Check the UU fallback without writing: for up to n stored channels, fetch as if on UU
+ * (Shorts dropped via UUSH) and as normal (UULF); the non-Short sets should match.
+ */
+function spikeUuPath_(b) {
+  var ctx = newCtx();
+  var now = Date.now();
+  var chans = readTable('channels').filter(function (c) { return c.subscribed === true; }).slice(0, Math.min(Number(b.n) || 5, 20));
+  var asUU = fetchUploads(chans.map(function (c) { var x = shallowCopy(c); x.playlist = 'UU'; return x; }), { known: {}, live: false, maxResults: 50 }, ctx, now);
+  var asLF = fetchUploads(chans.map(function (c) { var x = shallowCopy(c); x.playlist = 'LF'; return x; }), { known: {}, live: false, maxResults: 50 }, ctx, now);
+  var lf = {};
+  asLF.newRows.forEach(function (r) { lf[r.id] = true; });
+  var uuVideos = asUU.newRows.filter(function (r) { return r.kind === 'video'; });
+  var oldestLf = Infinity;
+  asLF.newRows.forEach(function (r) { var t = Date.parse(r.published); if (t < oldestLf) oldestLf = t; });
+  return {
+    ok: true, channels: chans.length,
+    uuRowsByKind: countBy_(asUU.newRows, function (r) { return r.kind; }),
+    lfRows: asLF.newRows.length,
+    uuVideosNotInLf: uuVideos.filter(function (r) { return !lf[r.id] && Date.parse(r.published) >= oldestLf; }).length,
+    units: ctx.units, errors: errorSummary(ctx)
   };
 }
 

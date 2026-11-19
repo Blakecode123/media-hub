@@ -7,7 +7,7 @@ var RUN_STALE_MS = 6 * 60 * 1000;
 var REFRESH_NOW_MIN_GAP_MS = 5 * 60 * 1000;
 var META_MAX_AGE_MS = 7 * DAY_MS;
 var LIVE_NO_RECHECK_MS = 7 * DAY_MS;
-var SHORT_MAX_SEC = 180;
+var SHORT_MAX_SEC = 180; // used by spike S1
 
 function isoNow_(ms) { return new Date(ms).toISOString(); }
 
@@ -127,26 +127,31 @@ function fetchUploads(channels, opts, ctx, now) {
       });
   }
 
+  // Shorts on UU channels: the channel's Shorts playlist (UUSH) names them (1 unit per UU channel).
+  // Spike S1 (2026-11-19): the youtube.com/shorts/<id> URL check does not work from Apps Script.
+  var uuChans = {};
+  for (var vidId in cands) if (cands[vidId].viaUU && cands[vidId].kind !== 'live') uuChans[cands[vidId].channelId] = true;
+  var uuList = Object.keys(uuChans);
+  var shortIds = {};
+  if (uuList.length) {
+    fetchPlaylistHeads(uuList.map(function (id) { return 'UUSH' + id.slice(2); }), 50, ctx).forEach(function (r) {
+      if (r.code === 200) r.items.forEach(function (it) { shortIds[it.videoId] = true; });
+      else if (r.code !== 404 && r.code !== -1) addError(ctx, 'shorts list ' + r.code + (r.reason ? ' ' + r.reason : ''));
+    });
+  }
+
   // Details for new IDs. Upcoming premieres and running lives are left out until they finish.
   var ids = Object.keys(cands);
   var details = ids.length ? fetchVideoDetails(ids, ctx) : {};
   var newRows = [];
-  var shortCheck = [];
   ids.forEach(function (id) {
     if (!details[id]) return;
     var row = videoRowFrom(details[id], cands[id].kind, nowIso);
     if (!row) return;
     if (!row.channelId) row.channelId = cands[id].channelId;
-    if (cands[id].viaUU && row.kind !== 'live' && row.durationSec <= SHORT_MAX_SEC) shortCheck.push(row);
+    if (shortIds[id] && row.kind !== 'live') row.kind = 'short';
     newRows.push(row);
   });
-  if (shortCheck.length) {
-    var isShort = checkShortsByUrl(shortCheck.map(function (r) { return r.id; }));
-    shortCheck.forEach(function (r) {
-      if (isShort[r.id] === true) r.kind = 'short';
-      else if (isShort[r.id] === null) addError(ctx, 'shorts check failed');
-    });
-  }
   return { chanUpdates: chanUpdates, newRows: newRows, kindUpdates: kindUpdates };
 }
 
