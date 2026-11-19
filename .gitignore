@@ -1,0 +1,21 @@
+# Personal data and imports never go in this public repo.
+# Keep them in D:\Projects\Data\media-hub instead.
+data/
+imports/
+*.csv
+*.json.export
+watch-history.*
+
+# clasp: the project file holds the Apps Script ID; the rc file holds login tokens.
+.clasp.json
+.clasprc.json
+
+# Secrets and local settings
+.env
+*.local.*
+
+# OS and editor files
+Thumbs.db
+.DS_Store
+.vscode/
+*.bak
