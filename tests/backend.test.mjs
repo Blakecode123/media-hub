@@ -257,12 +257,14 @@ test('videosOut: no Shorts, newest first, state and rating merged', () => {
     { id: 'b', channelId: CH, title: 't', published: daysAgo(1), durationSec: 50, kind: 'short' },
     { id: 'c', channelId: CH, title: 't', published: daysAgo(2), durationSec: 3600, kind: 'live' }
   ];
-  const out = plain(L.videosOut(vids, [{ videoId: 'a', state: 'watched', rating: 'down' }]));
+  const out = plain(L.videosOut(vids, [{ videoId: 'a', state: 'watched', rating: 'down', updated: daysAgo(1) }]));
   assert.deepEqual(out.map((v) => v.id), ['c', 'a']);
   assert.equal(out[0].live, true);
   assert.equal(out[0].state, null);
+  assert.equal(out[0].updated, null);
   assert.equal(out[1].state, 'watched');
   assert.equal(out[1].rating, 'down');
+  assert.equal(out[1].updated, daysAgo(1));
 });
 
 test('channelOut: API shape', () => {

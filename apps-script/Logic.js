@@ -471,7 +471,7 @@ function videosOut(videos, states) {
     out.push({
       id: String(v.id), channelId: v.channelId, title: String(v.title || ''), published: v.published,
       durationSec: Number(v.durationSec) || 0, live: v.kind === 'live',
-      state: s.state || null, rating: s.rating || null
+      state: s.state || null, rating: s.rating || null, updated: s.updated || null
     });
   }
   out.sort(function (a, b) { return a.published < b.published ? 1 : a.published > b.published ? -1 : 0; });
