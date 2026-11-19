@@ -535,7 +535,13 @@ async function suggestAI() {
     const n = (reply.channels || []).length;
     showToast(n ? `AI looked at ${n} channel${n === 1 ? '' : 's'}.` : 'AI had nothing to suggest.');
   } catch (e) {
-    showToast(`AI suggestions failed (${e.code}).`, { error: true });
+    const why = {
+      no_pages: 'Make pages in Settings first.',
+      no_gemini_key: 'The backend has no Gemini key. Set GEMINI_API_KEY in the Apps Script properties.',
+      gemini_busy: 'Gemini is busy (rate limit). Try again in a minute.',
+      busy: 'The backend is busy. Try again in a minute.',
+    }[e.code];
+    showToast(why || `AI suggestions failed (${e.code}).`, { error: true });
   } finally {
     S.sort.busy = false;
     renderData();

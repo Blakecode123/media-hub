@@ -11,7 +11,11 @@ export class ApiError extends Error {
 // Codes that mean "try again later": the request may not have reached the backend,
 // or the backend was busy (script lock) or gave a non-JSON page.
 const RETRY_CODES = new Set(['network', 'busy', 'badreply', 'timeout']);
-export const MAX_TRIES = 3; // for other server errors, then the entry is dropped
+export const MAX_TRIES = 3; // for other server errors (for example 'server'), then the entry is dropped
+// Codes a retry cannot fix (the request itself is wrong): the entry is dropped at once.
+export function isPermanentError(code) {
+  return /^bad_/.test(code) || ['not_found', 'subscribed', 'unknown_action'].includes(code);
+}
 
 // ---- real backend ----
 
@@ -170,7 +174,7 @@ export class Outbox {
             this.onFail(e, err, { blocked: true });
             break;
           }
-          if (RETRY_CODES.has(code) || e.tries < MAX_TRIES) {
+          if (RETRY_CODES.has(code) || (!isPermanentError(code) && e.tries < MAX_TRIES)) {
             this._save();
             this.onFail(e, err, { retry: true });
             this._scheduleRetry(e.tries);
@@ -200,17 +204,19 @@ export class Outbox {
 
 // ---- mock backend (?mock=1) ----
 
-// Same actions and reply shapes as the real backend, kept in memory.
+// Same actions, reply shapes and error codes as the real backend
+// (shared note api-shapes-backend.md from Session A), kept in memory.
 // seed: parsed mock/bootstrap.json. Its dates are moved so `mockNow` becomes now.
+// Seed fields outside the API shape (`handle`) stay inside the mock and are never sent.
 export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, failRate = 0, rng = Math.random,
   log = () => {} } = {}) {
   const shift = now() - Date.parse(seed.mockNow);
   const iso = v => new Date(Date.parse(v) + shift).toISOString();
   const db = {
-    pages: seed.pages.map(p => ({ ...p })),
+    pages: seed.pages.map((p, i) => ({ id: p.id, name: p.name, hint: p.hint || '', order: i })),
     channels: seed.channels.map(c => ({ ...c, pageIds: [...(c.pageIds || [])],
       suggestedPageIds: c.suggestedPageIds === 'none' ? 'none' : [...(c.suggestedPageIds || [])] })),
-    videos: seed.videos.map(v => ({ ...v, published: iso(v.published), updated: v.updated ? iso(v.updated) : '' })),
+    videos: seed.videos.map(v => ({ ...v, published: iso(v.published) })),
     spare: (seed.spareVideos || []).map(v => ({ ...v })),
     lastRefresh: new Date(now() - 20 * 60000).toISOString(),
     lastError: seed.lastError || '',
@@ -218,18 +224,38 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
   };
   let nextChannel = 1;
 
-  const copy = x => JSON.parse(JSON.stringify(x));
-  const pageIds = () => new Set(db.pages.map(p => p.id));
-  const bootstrap = () => copy({ pages: db.pages, channels: db.channels, videos: db.videos,
-    lastRefresh: db.lastRefresh, lastError: db.lastError });
+  const PAGE_ID = /^[A-Za-z0-9_-]{1,40}$/;
+  const STATES = ['watched', 'seen', 'hidden'];
+  const pageSet = () => new Set(db.pages.map(p => p.id));
+  const pageOut = p => ({ id: p.id, name: p.name, hint: p.hint, order: p.order });
+  function channelOut(c) {
+    const keep = pageSet();
+    return {
+      id: c.id, title: String(c.title || ''), description: String(c.description || ''), thumb: String(c.thumb || ''),
+      subscribed: c.subscribed === true, addedByLink: c.addedByLink === true,
+      pageIds: c.pageIds.filter(id => keep.has(id)),
+      suggestedPageIds: c.suggestedPageIds === 'none' ? 'none' : c.suggestedPageIds.filter(id => keep.has(id)),
+      hasLive: c.hasLive || 'unknown',
+    };
+  }
+  const videoOut = v => ({
+    id: v.id, channelId: v.channelId, title: String(v.title || ''), published: v.published,
+    durationSec: Number(v.durationSec) || 0, live: v.live === true,
+    state: v.state || null, rating: v.rating || null,
+  });
+  const newestFirst = (a, b) => (a.published < b.published ? 1 : a.published > b.published ? -1 : 0);
+  const videosOut = list => list.map(videoOut).sort(newestFirst);
+  const bootstrap = () => ({
+    pages: db.pages.map(pageOut), channels: db.channels.map(channelOut), videos: videosOut(db.videos),
+    lastRefresh: db.lastRefresh, lastError: db.lastError,
+  });
 
   function takeSpare(channelId, n) {
     const out = [];
     while (out.length < n && db.spare.length) {
       const s = db.spare.shift();
-      out.push({ id: s.id, channelId, title: s.title, durationSec: s.durationSec,
-        published: new Date(now() - (out.length + 1) * 3 * 3600000).toISOString(),
-        fetched: new Date(now()).toISOString(), state: null, rating: null, updated: '' });
+      out.push({ id: s.id, channelId, title: s.title, durationSec: s.durationSec, live: false,
+        published: new Date(now() - (out.length + 1) * 3 * 3600000).toISOString(), state: null, rating: null });
     }
     return out;
   }
@@ -243,58 +269,81 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
 
   const handlers = {
     bootstrap: () => bootstrap(),
-    setState({ items = [], state = null }) {
+    setState({ items, state }) {
+      if (!Array.isArray(items) || !items.length || items.length > 1000) throw new ApiError('bad_request');
+      if (state !== null && !STATES.includes(state)) throw new ApiError('bad_state');
+      if (items.some(it => !it || typeof it.videoId !== 'string' || !it.videoId || typeof it.channelId !== 'string')) {
+        throw new ApiError('bad_request');
+      }
       const ids = new Set(items.map(i => i.videoId));
-      const at = new Date(now()).toISOString();
-      for (const v of db.videos) if (ids.has(v.id)) { v.state = state || null; v.updated = at; }
+      for (const v of db.videos) if (ids.has(v.id)) v.state = state;
       return { count: items.length };
     },
-    rate({ videoId, rating = null }) {
+    rate({ videoId, channelId, rating }) {
+      if (typeof videoId !== 'string' || !videoId || typeof channelId !== 'string') throw new ApiError('bad_request');
+      if (rating !== null && rating !== 'up' && rating !== 'down') throw new ApiError('bad_rating');
       const v = db.videos.find(x => x.id === videoId);
-      if (!v) throw new ApiError('not_found');
-      v.rating = rating || null;
-      if (rating) { v.state = 'watched'; v.updated = new Date(now()).toISOString(); }
+      if (v) {
+        v.rating = rating;
+        if (rating) v.state = 'watched';
+      }
       return {};
     },
-    savePages({ pages = [] }) {
-      db.pages = pages.map((p, i) => ({ id: String(p.id), name: String(p.name || ''), hint: String(p.hint || ''), order: i }));
-      const keep = pageIds();
+    savePages({ pages }) {
+      if (!Array.isArray(pages)) throw new ApiError('bad_request');
+      const seen = new Set();
+      const next = pages.map((p, i) => {
+        const id = p && p.id ? p.id : `p${Math.random().toString(36).slice(2, 12)}`;
+        if (typeof id !== 'string' || !PAGE_ID.test(id) || id === 'none' || seen.has(id)) throw new ApiError('bad_page_id');
+        const name = typeof p.name === 'string' ? p.name.trim().slice(0, 100) : '';
+        if (!name) throw new ApiError('bad_page_name');
+        seen.add(id);
+        return { id, name, hint: typeof p.hint === 'string' ? p.hint.slice(0, 500) : '', order: i };
+      });
+      db.pages = next;
       const changed = [];
       for (const c of db.channels) {
         const before = JSON.stringify([c.pageIds, c.suggestedPageIds]);
-        c.pageIds = c.pageIds.filter(id => keep.has(id));
-        if (c.suggestedPageIds !== 'none') c.suggestedPageIds = c.suggestedPageIds.filter(id => keep.has(id));
+        c.pageIds = c.pageIds.filter(id => seen.has(id));
+        if (c.suggestedPageIds !== 'none') c.suggestedPageIds = c.suggestedPageIds.filter(id => seen.has(id));
         if (JSON.stringify([c.pageIds, c.suggestedPageIds]) !== before) changed.push(c);
       }
-      return { pages: copy(db.pages), channels: copy(changed) };
+      return { pages: db.pages.map(pageOut), channels: changed.map(channelOut) };
     },
-    setChannelPages({ channelId, pageIds: ids = [] }) {
+    setChannelPages({ channelId, pageIds: ids }) {
+      if (typeof channelId !== 'string' || !Array.isArray(ids)) throw new ApiError('bad_request');
       const c = db.channels.find(x => x.id === channelId);
       if (!c) throw new ApiError('not_found');
-      const keep = pageIds();
-      c.pageIds = ids.filter(id => keep.has(id));
-      return { channel: copy(c) };
+      const keep = pageSet();
+      c.pageIds = ids.filter((id, i, a) => keep.has(id) && a.indexOf(id) === i);
+      return { channel: channelOut(c) };
     },
     addChannel({ link = '' }) {
       const s = String(link).trim();
-      const handle = (s.match(/@([\w.-]{3,})/) || [])[1];
-      const chanId = (s.match(/\/channel\/(UC[\w-]{22})/) || [])[1];
-      const vidId = (s.match(/(?:v=|youtu\.be\/|\/shorts\/)([\w-]{11})/) || [])[1];
-      if (!handle && !chanId && !vidId) throw new ApiError('bad_link');
-      const found = db.channels.find(c => c.id === chanId || (handle && c.handle === handle) ||
+      const handle = (s.match(/(?:^|\/)@([\w.-]{3,})/) || [])[1];
+      const chanId = (s.match(/(?:^|\/channel\/)(UC[\w-]{22})(?:$|[/?#])/) || [])[1];
+      const user = (s.match(/\/user\/([\w.-]+)/) || [])[1];
+      const vidId = (s.match(/(?:v=|youtu\.be\/|\/shorts\/|\/live\/)([\w-]{11})/) || [])[1];
+      if (!handle && !chanId && !user && !vidId) throw new ApiError('bad_link');
+      const name = handle || user;
+      const found = db.channels.find(c => c.id === chanId || (name && c.handle === name) ||
         (vidId && db.videos.some(v => v.id === vidId && v.channelId === c.id)));
-      if (found) return { channel: copy(found), videos: copy(db.videos.filter(v => v.channelId === found.id)) };
-      const id = chanId || `UCmock${String(nextChannel++).padStart(16, '0')}`;
-      const name = handle ? handle.replace(/[-_.]/g, ' ') : `Linked channel ${nextChannel - 1}`;
-      const c = { id, title: name, handle: handle || '', description: `A channel added by link (${s}).`,
-        thumb: '', subscribed: false, addedByLink: true, pageIds: [], suggestedPageIds: [],
-        playlist: 'LF', hasLive: 'unknown' };
+      if (found) {
+        found.addedByLink = true;
+        return { channel: channelOut(found), videos: videosOut(db.videos.filter(v => v.channelId === found.id)) };
+      }
+      if (vidId) throw new ApiError('not_found'); // the mock knows no other videos
+      const id = chanId || `UCmock${String(nextChannel++).padStart(18, '0')}`;
+      const c = { id, title: name ? name.replace(/[-_.]/g, ' ') : `Linked channel ${nextChannel - 1}`, handle: name || '',
+        description: `A channel added by link (${s}).`, thumb: '', subscribed: false, addedByLink: true,
+        pageIds: [], suggestedPageIds: [], hasLive: 'unknown' };
       db.channels.push(c);
       const vids = takeSpare(id, 2);
       db.videos.push(...vids);
-      return { channel: copy(c), videos: copy(vids) };
+      return { channel: channelOut(c), videos: videosOut(vids) };
     },
     removeChannel({ channelId }) {
+      if (typeof channelId !== 'string') throw new ApiError('bad_request');
       const c = db.channels.find(x => x.id === channelId);
       if (!c) throw new ApiError('not_found');
       if (c.subscribed) throw new ApiError('subscribed');
@@ -303,18 +352,19 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
       return {};
     },
     suggestPages({ channelIds } = {}) {
-      const keep = pageIds();
-      const targets = channelIds && channelIds.length
+      if (!db.pages.length) throw new ApiError('no_pages');
+      const keep = pageSet();
+      const targets = Array.isArray(channelIds) && channelIds.length
         ? db.channels.filter(c => channelIds.includes(c.id))
         : db.channels.filter(c => !c.pageIds.some(id => keep.has(id)) && Array.isArray(c.suggestedPageIds) && !c.suggestedPageIds.length);
-      if (!db.pages.length) return { channels: [] };
       targets.forEach(suggest);
-      return { channels: copy(targets) };
+      return { channels: targets.map(channelOut) };
     },
     refreshNow() {
       if (now() - db.lastRefreshNow < 5 * 60000) throw new ApiError('busy');
       db.lastRefreshNow = now();
-      const target = db.channels.find(c => c.subscribed && c.pageIds.length);
+      const keep = pageSet();
+      const target = db.channels.find(c => c.subscribed && c.pageIds.some(id => keep.has(id)));
       if (target) db.videos.push(...takeSpare(target.id, 1));
       db.lastRefresh = new Date(now()).toISOString();
       return bootstrap();
@@ -332,7 +382,8 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
       }
       const h = handlers[action];
       if (!h) throw new ApiError('unknown_action');
-      const out = h(body);
+      // A JSON round trip, like the network: callers never share objects with the mock db.
+      const out = JSON.parse(JSON.stringify(h(body || {})));
       log('mock', action, 'ok');
       return { ok: true, ...out };
     },
