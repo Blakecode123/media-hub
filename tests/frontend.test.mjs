@@ -284,7 +284,7 @@ test('outbox: an error a retry cannot fix is dropped at once', async () => {
 // ---- mock backend: must match Session A's reply shapes (shared note api-shapes-backend.md) ----
 
 const CHANNEL_KEYS = ['addedByLink', 'description', 'hasLive', 'id', 'pageIds', 'subscribed', 'suggestedPageIds', 'thumb', 'title'];
-const VIDEO_KEYS = ['channelId', 'durationSec', 'id', 'live', 'published', 'rating', 'state', 'title'];
+const VIDEO_KEYS = ['channelId', 'durationSec', 'id', 'live', 'published', 'rating', 'state', 'title', 'updated'];
 const PAGE_KEYS = ['hint', 'id', 'name', 'order'];
 
 function checkChannel(c) {
@@ -302,6 +302,7 @@ function checkVideo(v) {
   assert.ok(v.state === null || ['watched', 'seen', 'hidden'].includes(v.state));
   assert.ok(v.rating === null || ['up', 'down'].includes(v.rating));
   assert.ok(!Number.isNaN(Date.parse(v.published)) && v.published.endsWith('Z'));
+  assert.ok(v.updated === null || (typeof v.updated === 'string' && !Number.isNaN(Date.parse(v.updated))));
 }
 function checkBootstrap(b) {
   assert.deepEqual(Object.keys(b).sort(), ['channels', 'lastError', 'lastRefresh', 'ok', 'pages', 'videos']);
@@ -332,6 +333,7 @@ test('mock backend: replies match the backend shapes and error codes', async () 
   await assert.rejects(api.call('setState', { items: [], state: 'seen' }), e => e.code === 'bad_request');
   assert.deepEqual(await api.call('rate', { videoId: v.id, channelId: v.channelId, rating: 'up' }), { ok: true });
   assert.equal(api.db.videos.find(x => x.id === v.id).state, 'watched');
+  assert.equal(api.db.videos.find(x => x.id === v.id).updated, new Date(now).toISOString());
   await api.call('rate', { videoId: v.id, channelId: v.channelId, rating: null });
   assert.equal(api.db.videos.find(x => x.id === v.id).state, 'watched'); // null keeps the state
 
@@ -389,6 +391,8 @@ test('mock seed holds the cases the screens need', async () => {
   assert.ok(d.channels.some(c => !c.subscribed && c.addedByLink), 'channel added by link');
   assert.ok(d.videos.some(v => v.live), 'live recording');
   assert.ok(L.watchedVideos(d).length >= 2, 'watched');
+  // Watched sorts by `updated` (time watched), not by publish date.
+  assert.deepEqual(L.watchedVideos(d).map(v => v.id), ['09R8_2nJtjg', '60ItHLz5WEA', 'tgbNymZ7vqY']);
   assert.ok(L.feedVideos(d, 'other', { now: NOW }).length >= 3, 'Other feed');
 });
 

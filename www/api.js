@@ -216,7 +216,7 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
     pages: seed.pages.map((p, i) => ({ id: p.id, name: p.name, hint: p.hint || '', order: i })),
     channels: seed.channels.map(c => ({ ...c, pageIds: [...(c.pageIds || [])],
       suggestedPageIds: c.suggestedPageIds === 'none' ? 'none' : [...(c.suggestedPageIds || [])] })),
-    videos: seed.videos.map(v => ({ ...v, published: iso(v.published) })),
+    videos: seed.videos.map(v => ({ ...v, published: iso(v.published), updated: v.updated ? iso(v.updated) : null })),
     spare: (seed.spareVideos || []).map(v => ({ ...v })),
     lastRefresh: new Date(now() - 20 * 60000).toISOString(),
     lastError: seed.lastError || '',
@@ -241,7 +241,7 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
   const videoOut = v => ({
     id: v.id, channelId: v.channelId, title: String(v.title || ''), published: v.published,
     durationSec: Number(v.durationSec) || 0, live: v.live === true,
-    state: v.state || null, rating: v.rating || null,
+    state: v.state || null, rating: v.rating || null, updated: v.updated || null,
   });
   const newestFirst = (a, b) => (a.published < b.published ? 1 : a.published > b.published ? -1 : 0);
   const videosOut = list => list.map(videoOut).sort(newestFirst);
@@ -255,7 +255,7 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
     while (out.length < n && db.spare.length) {
       const s = db.spare.shift();
       out.push({ id: s.id, channelId, title: s.title, durationSec: s.durationSec, live: false,
-        published: new Date(now() - (out.length + 1) * 3 * 3600000).toISOString(), state: null, rating: null });
+        published: new Date(now() - (out.length + 1) * 3 * 3600000).toISOString(), state: null, rating: null, updated: null });
     }
     return out;
   }
@@ -276,7 +276,8 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
         throw new ApiError('bad_request');
       }
       const ids = new Set(items.map(i => i.videoId));
-      for (const v of db.videos) if (ids.has(v.id)) v.state = state;
+      const at = new Date(now()).toISOString();
+      for (const v of db.videos) if (ids.has(v.id)) { v.state = state; v.updated = at; }
       return { count: items.length };
     },
     rate({ videoId, channelId, rating }) {
@@ -286,6 +287,7 @@ export function createMockApi(seed, { now = () => Date.now(), latencyMs = 150, f
       if (v) {
         v.rating = rating;
         if (rating) v.state = 'watched';
+        v.updated = new Date(now()).toISOString();
       }
       return {};
     },
